@@ -19,11 +19,15 @@ for(index in 1:length(patientsNS)){
 # Loglike-Funktionen zur Schätzung der Hyperparameter
 
 # Berechnen der loglikelihood für einen einzelnen Datensatz
+#
+# param[1]: sigmasq
+# param[2]: mu
+# param[3]: l
 loglike<-function(param,x, y) {
   
-  k <- calcSigma(x, x, param[2]) + diag(x = param[1], length(x), length(x))
+  k <- calcSigma(x, x, param[3]) + diag(x = param[1], length(x), length(x))
   
-  ll <- -.5*t(y - param[3]) %*% solve(k) %*% (y - param[3]) - .5*log(det(k)) - .5*length(x)*log(2*pi)
+  ll <- -.5*t(y - param[2]) %*% solve(k) %*% (y - param[2]) - .5*log(det(k)) - .5*length(x)*log(2*pi)
   return(ll)
 }
 
@@ -32,10 +36,11 @@ loglike.sum<-function(param,data.df){
   
   ll<-0
   patientIDs<-unique(data.df$patID)
+  
   for (patID in patientIDs){
     t<-data.df$t[data.df$patID==patID]
     inr<-data.df$inr[data.df$patID==patID]
-    ll<-ll-1*loglike(param,t,inr)
+    ll<-ll+loglike(param,t,inr)
   }
   
   return(ll)
@@ -44,13 +49,21 @@ loglike.sum<-function(param,data.df){
 # End Helper-Funktionen
 
 # function calcHyperParams
-calcHyperParams<-function(data.df,lower){
+calcHyperParams<-function(data.df){
   
-  hyperParams<-optim(par=c(2,4,2), loglike.sum, data=data.df, method = "L-BFGS-B", lower = lower, upper = c(Inf, Inf, Inf))
+  mu.start = mean(data.df$inr)
+  l.start = 5*mean(diff(data.df$t))
+  sigmasq.start = max(0.05,0.25*mu.start)
+  
+  hyperParams<-optim(par=c(sigmasq.start,mu.start,l.start),
+                     function(param) -loglike.sum(param,data.df), 
+                     method = "L-BFGS-B", 
+                     lower = c(.01*mu.start,-Inf,2*min(diff(data.df$t))), 
+                     upper = c(Inf, Inf, Inf))
   
   hyperParams<-list(sigmasq=hyperParams$par[1],
-                    l=hyperParams$par[2],
-                    mu=hyperParams$par[3],
+                    mu=hyperParams$par[2],
+                    l=hyperParams$par[3],
                     loglike.value=hyperParams$value,
                     message=as.character(hyperParams$message)
   )
@@ -70,7 +83,7 @@ calcHyperParams<-function(data.df,lower){
 # Rückgabewert:
 # Kovarianzmatrix
 
-calcSigma<-function(x1,x2,l=1){
+calcSigma<-function(x1,x2,l){
   
   sigma<-matrix(rep(0,length(x1)*length(x2)),nrow=length(x1))
   
@@ -95,8 +108,7 @@ calcSigma<-function(x1,x2,l=1){
 # mu        Mittelwert
 gpReg<-function(x.test,x.train, y.train,l=1, sigmasq=0, mu=0){
   
-  
-  k.train.train.inv<-solve(calcSigma(x1=x.train,x2=x.train,l=l))+diag(x=sigmasq,nrow=length(x.train),ncol=length(x.train))
+  k.train.train.inv<-solve(calcSigma(x1=x.train,x2=x.train,l=l)+diag(x=sigmasq,nrow=length(x.train),ncol=length(x.train)))
   
   k.train.test<-calcSigma(x1=x.train,x2=x.test,l=l)
   
@@ -114,15 +126,15 @@ gpReg<-function(x.test,x.train, y.train,l=1, sigmasq=0, mu=0){
 
 
 # Render GP-Plot
-renderGPPlot<-function(gp){
+renderGPPlot<-function(gp,x.train,y.train){
   
   lo95=gp$predictions$lo95
   hi95=gp$predictions$hi95
   
   gp.plot<-ggplot(data=gp$predictions,aes(x, mean))+
-    geom_line()
-    #geom_ribbon(aes(ymin = lo95, ymax = hi95), alpha = .25)+ 
-    #geom_point(aes(x = t, y = inr), data = data.frame(t,inr))
+    geom_line()+
+    geom_ribbon(aes(ymin = lo95, ymax = hi95), alpha = .25)+ 
+    geom_point(aes(x = x.train, y = y.train), data = data.frame(x.train,y.train))
   
   return(gp.plot)
   
@@ -133,11 +145,12 @@ renderGPPlot<-function(gp){
 patID<-28
 # Schritt 1: Schätzung der Hyperparameter
 # Entweder kumulativ aus dem Datensatz aller Patienten:
-# hyperParams<-calcHyperParams(data.df,lower=c(0.1,90,0))
+# hyperParams<-calcHyperParams(data.df)
 #
 # oder aus einem einzelnen Patientendatensatz:
-  hyperParams<-calcHyperParams(data.df[data.df$patID==patID,],lower=c(0.2,90,2))
-  print(paste("Hyperparameter:","sigmasq:",hyperParams$sigmasq,"l:",hyperParams$l,"mu",hyperParams$mu))
+  hyperParams<-calcHyperParams(data.df[data.df$patID==patID,])
+  
+  
 # Schritt 2: Festlegung der Daten zum Patienten
   patient<-data.df[data.df$patID==patID,]
   x.train<-patient$t
@@ -153,4 +166,5 @@ gp<-gpReg(x.test=x.test,
           sigmasq=hyperParams$sigmasq,
           mu=hyperParams$mu)
 
-print(gp$predictions$mean)
+#Schritt 4: Plot GP
+show(renderGPPlot(gp,x.train,y.train))
