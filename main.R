@@ -1,5 +1,6 @@
 library(XML)
 library(tidyverse)
+library(ggplot2)
 
 # Einlesen der Daten
 patientsNS<-getNodeSet(xmlParse(file="./data/data.xml"),"//patients/patient")
@@ -25,9 +26,9 @@ for(index in 1:length(patientsNS)){
 # param[3]: l
 loglike<-function(param,x, y) {
   
-  k <- calcSigma(x, x, param[3]) + diag(x = param[1], length(x), length(x))
+  k <- calcSigma(x, x, param[2]) + diag(x = param[1], length(x), length(x))
   
-  ll <- -.5*t(y - param[2]) %*% solve(k) %*% (y - param[2]) - .5*log(det(k)) - .5*length(x)*log(2*pi)
+  ll <- -.5*t(y - mean(y)) %*% solve(k) %*% (y - mean(y)) - .5*log(det(k)) - .5*length(x)*log(2*pi)
   return(ll)
 }
 
@@ -55,15 +56,14 @@ calcHyperParams<-function(data.df){
   l.start = 5*mean(diff(data.df$t))
   sigmasq.start = max(0.05,0.25*mu.start)
   
-  hyperParams<-optim(par=c(sigmasq.start,mu.start,l.start),
+  hyperParams<-optim(par=c(sigmasq.start,l.start),
                      function(param) -loglike.sum(param,data.df), 
                      method = "L-BFGS-B", 
-                     lower = c(.01*mu.start,-Inf,2*min(diff(data.df$t))), 
-                     upper = c(Inf, Inf, Inf))
+                     lower = c(.01*mu.start,2*min(diff(data.df$t))), 
+                     upper = c(Inf,Inf))
   
   hyperParams<-list(sigmasq=hyperParams$par[1],
-                    mu=hyperParams$par[2],
-                    l=hyperParams$par[3],
+                    l=hyperParams$par[2],
                     loglike.value=hyperParams$value,
                     message=as.character(hyperParams$message)
   )
@@ -126,15 +126,18 @@ gpReg<-function(x.test,x.train, y.train,l=1, sigmasq=0, mu=0){
 
 
 # Render GP-Plot
-renderGPPlot<-function(gp,x.train,y.train){
+renderGPPlot<-function(gp,x.train,y.train,hyperParams){
   
   lo95=gp$predictions$lo95
   hi95=gp$predictions$hi95
-  
+  annotation<- paste("Hyperparams:","sigmasq",hyperParams$sigmasq,"l:",hyperParams$l)
+  print(annotation)
   gp.plot<-ggplot(data=gp$predictions,aes(x, mean))+
     geom_line()+
     geom_ribbon(aes(ymin = lo95, ymax = hi95), alpha = .25)+ 
     geom_point(aes(x = x.train, y = y.train), data = data.frame(x.train,y.train))
+    
+  
   
   return(gp.plot)
   
@@ -164,7 +167,7 @@ gp<-gpReg(x.test=x.test,
           y.train=y.train,
           l=hyperParams$l,
           sigmasq=hyperParams$sigmasq,
-          mu=hyperParams$mu)
+          mu=mean(y.train))
 
 #Schritt 4: Plot GP
-show(renderGPPlot(gp,x.train,y.train))
+show(renderGPPlot(gp,x.train,y.train,hyperParams))
